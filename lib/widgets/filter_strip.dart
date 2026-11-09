@@ -41,6 +41,14 @@ class FilterStrip extends StatelessWidget {
                     color: isSelected ? scheme.primary : Colors.white12,
                     width: isSelected ? 2.5 : 1,
                   ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: scheme.primary.withValues(alpha: 0.4),
+                            blurRadius: 14,
+                          ),
+                        ]
+                      : null,
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: ColorFiltered(

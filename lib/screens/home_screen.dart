@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../edit/image_ops.dart';
 import '../edit/prepared_image.dart';
+import '../theme.dart';
 import 'editor_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -60,64 +61,64 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      body: SafeArea(
-        child: Center(
+      body: GlowBackground(
+        child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 28),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Container(
-                  width: 96,
-                  height: 96,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: LinearGradient(
-                      colors: [scheme.primary, scheme.tertiary],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                  ),
-                  child: const Icon(Icons.auto_awesome, size: 46, color: Colors.white),
-                ),
-                const SizedBox(height: 22),
-                Text(
+                const Spacer(flex: 3),
+                const _Hero(),
+                const SizedBox(height: 28),
+                const Text(
                   'Glow Studio',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                      ),
+                  style: TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.3,
+                    color: Colors.white,
+                  ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 10),
                 Text(
-                  'Retouch, grade and glow — right on your phone.',
+                  'Retouch, reshape and glow —\nright on your phone.',
                   textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Colors.white70,
-                      ),
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.4,
+                    color: Colors.white.withValues(alpha: 0.65),
+                  ),
                 ),
-                const SizedBox(height: 40),
+                const Spacer(flex: 4),
                 if (_busy)
                   const Padding(
-                    padding: EdgeInsets.all(12),
+                    padding: EdgeInsets.all(16),
                     child: CircularProgressIndicator(),
                   )
                 else ...[
-                  _BigButton(
-                    icon: Icons.photo_library_outlined,
+                  GradientButton(
                     label: 'Choose a photo',
-                    filled: true,
+                    icon: Icons.photo_library_outlined,
                     onTap: () => _pick(ImageSource.gallery),
                   ),
                   const SizedBox(height: 14),
-                  _BigButton(
-                    icon: Icons.photo_camera_outlined,
+                  _GhostButton(
                     label: 'Take a photo',
-                    filled: false,
+                    icon: Icons.photo_camera_outlined,
                     onTap: () => _pick(ImageSource.camera),
                   ),
                 ],
+                const SizedBox(height: 24),
+                Text(
+                  'Face-only editing · your photos never leave the device',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: Colors.white.withValues(alpha: 0.4),
+                  ),
+                ),
+                const Spacer(flex: 1),
               ],
             ),
           ),
@@ -127,39 +128,53 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _BigButton extends StatelessWidget {
-  const _BigButton({
-    required this.icon,
-    required this.label,
-    required this.filled,
-    required this.onTap,
-  });
+class _Hero extends StatelessWidget {
+  const _Hero();
 
-  final IconData icon;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 108,
+      height: 108,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: kBrandGradient,
+        boxShadow: [
+          BoxShadow(
+            color: kPink.withValues(alpha: 0.45),
+            blurRadius: 36,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: const Icon(Icons.auto_awesome, size: 50, color: Colors.white),
+    );
+  }
+}
+
+class _GhostButton extends StatelessWidget {
+  const _GhostButton({required this.label, required this.icon, required this.onTap});
+
   final String label;
-  final bool filled;
+  final IconData icon;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     return SizedBox(
       width: double.infinity,
-      height: 56,
-      child: filled
-          ? FilledButton.icon(
-              onPressed: onTap,
-              icon: Icon(icon),
-              label: Text(label),
-            )
-          : OutlinedButton.icon(
-              onPressed: onTap,
-              icon: Icon(icon),
-              label: Text(label),
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(color: scheme.outline),
-              ),
-            ),
+      height: 54,
+      child: OutlinedButton.icon(
+        onPressed: onTap,
+        icon: Icon(icon, size: 20),
+        label: Text(label),
+        style: OutlinedButton.styleFrom(
+          foregroundColor: Colors.white,
+          side: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(27)),
+          textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        ),
+      ),
     );
   }
 }

@@ -13,6 +13,7 @@ import '../edit/image_ops.dart';
 import '../edit/makeup.dart';
 import '../edit/prepared_image.dart';
 import '../edit/reshape.dart';
+import '../theme.dart';
 import '../widgets/adjust_slider.dart';
 import '../widgets/filter_strip.dart';
 import '../widgets/makeup_controls.dart';
@@ -212,10 +213,12 @@ class _EditorScreenState extends State<EditorScreen>
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   )
-                : FilledButton.icon(
-                    onPressed: _save,
-                    icon: const Icon(Icons.save_alt, size: 18),
-                    label: const Text('Save'),
+                : GradientButton(
+                    label: 'Save',
+                    icon: Icons.save_alt,
+                    onTap: _save,
+                    height: 40,
+                    expand: false,
                   ),
           ),
         ],
@@ -249,43 +252,93 @@ class _EditorScreenState extends State<EditorScreen>
               child: Image.memory(bytes, gaplessPlayback: true, fit: BoxFit.contain),
             ),
             if (_rendering)
-              Positioned(top: 12, right: 12, child: _pill('Rendering…')),
+              Positioned(top: 14, right: 14, child: _pill('Rendering…', dot: true)),
             if (_showOriginal)
-              Positioned(bottom: 12, child: _pill('Original')),
+              Positioned(bottom: 16, child: _pill('Original'))
+            else if (_pipelineActive)
+              Positioned(
+                bottom: 16,
+                child: _pill('Hold to compare', icon: Icons.compare),
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _pill(String text) {
+  Widget _pill(String text, {IconData? icon, bool dot = false}) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
-        color: Colors.black54,
+        color: Colors.black.withValues(alpha: 0.55),
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
-      child: Text(text, style: const TextStyle(fontSize: 12, color: Colors.white)),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (dot) ...[
+            Container(
+              width: 7,
+              height: 7,
+              decoration: const BoxDecoration(color: kPink, shape: BoxShape.circle),
+            ),
+            const SizedBox(width: 7),
+          ],
+          if (icon != null) ...[
+            Icon(icon, size: 13, color: Colors.white70),
+            const SizedBox(width: 6),
+          ],
+          Text(text, style: const TextStyle(fontSize: 12, color: Colors.white)),
+        ],
+      ),
     );
   }
 
   Widget _controls(ColorScheme scheme) {
     return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFF16161C),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      decoration: BoxDecoration(
+        color: kPanel,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.06))),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.4),
+            blurRadius: 20,
+            offset: const Offset(0, -6),
+          ),
+        ],
       ),
       child: SafeArea(
         top: false,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            Container(
+              margin: const EdgeInsets.only(top: 10, bottom: 2),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
             TabBar(
               controller: _tabs,
               isScrollable: true,
               tabAlignment: TabAlignment.center,
-              labelColor: scheme.primary,
-              indicatorColor: scheme.primary,
+              dividerColor: Colors.transparent,
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white54,
+              labelStyle: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+              unselectedLabelStyle:
+                  const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500),
+              indicator: BoxDecoration(
+                color: kPink.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(30),
+                border: Border.all(color: kPink.withValues(alpha: 0.5)),
+              ),
               tabs: const [
                 Tab(text: 'Light'),
                 Tab(text: 'Skin'),
@@ -295,8 +348,9 @@ class _EditorScreenState extends State<EditorScreen>
                 Tab(text: 'Filters'),
               ],
             ),
+            const SizedBox(height: 6),
             SizedBox(
-              height: 220,
+              height: 214,
               child: TabBarView(
                 controller: _tabs,
                 children: [
