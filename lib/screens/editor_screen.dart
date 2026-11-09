@@ -8,6 +8,7 @@ import 'package:gal/gal.dart';
 import '../edit/adjustments.dart';
 import '../edit/face.dart';
 import '../edit/face_geometry.dart';
+import '../edit/glow.dart';
 import '../edit/image_ops.dart';
 import '../edit/makeup.dart';
 import '../edit/prepared_image.dart';
@@ -31,6 +32,7 @@ class _EditorScreenState extends State<EditorScreen>
 
   Adjustments _adj = const Adjustments();
   Makeup _makeup = const Makeup();
+  Glow _glow = const Glow();
   Reshape _reshape = const Reshape();
 
   late Uint8List _basePreview;
@@ -49,9 +51,9 @@ class _EditorScreenState extends State<EditorScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    _tabs = TabController(length: 6, vsync: this);
     _tabs.addListener(() {
-      if ((_tabs.index == 2 || _tabs.index == 3) && !_detectTried) {
+      if (_tabs.index >= 2 && _tabs.index <= 4 && !_detectTried) {
         _runDetection();
       }
     });
@@ -67,7 +69,10 @@ class _EditorScreenState extends State<EditorScreen>
   }
 
   bool get _pipelineActive =>
-      _adj.smooth > 0.001 || !_makeup.isEmpty || !_reshape.isEmpty;
+      _adj.smooth > 0.001 ||
+      !_makeup.isEmpty ||
+      !_glow.isEmpty ||
+      !_reshape.isEmpty;
 
   Future<void> _runDetection() async {
     _detectTried = true;
@@ -109,6 +114,11 @@ class _EditorScreenState extends State<EditorScreen>
     _scheduleRender();
   }
 
+  void _setGlow(Glow next) {
+    setState(() => _glow = next);
+    _scheduleRender();
+  }
+
   void _scheduleRender() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 170), () async {
@@ -119,6 +129,7 @@ class _EditorScreenState extends State<EditorScreen>
           _basePreview,
           _adj.smooth,
           _makeup,
+          _glow,
           _reshape,
           _geom,
         );
@@ -138,7 +149,8 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() => _exporting = true);
     try {
       final original = await File(widget.prepared.sourcePath).readAsBytes();
-      final jpg = await renderExport(original, _adj, _makeup, _reshape, _geom);
+      final jpg =
+          await renderExport(original, _adj, _makeup, _glow, _reshape, _geom);
       if (!await Gal.hasAccess(toAlbum: true)) {
         await Gal.requestAccess(toAlbum: true);
       }
@@ -168,13 +180,14 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() {
       _adj = const Adjustments();
       _makeup = const Makeup();
+      _glow = const Glow();
       _reshape = const Reshape();
       _processed = _basePreview;
     });
   }
 
   bool get _isNeutral =>
-      _adj.isNeutral && _makeup.isEmpty && _reshape.isEmpty;
+      _adj.isNeutral && _makeup.isEmpty && _glow.isEmpty && _reshape.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -278,6 +291,7 @@ class _EditorScreenState extends State<EditorScreen>
                 Tab(text: 'Skin'),
                 Tab(text: 'Makeup'),
                 Tab(text: 'Shape'),
+                Tab(text: 'Glow'),
                 Tab(text: 'Filters'),
               ],
             ),
@@ -290,6 +304,7 @@ class _EditorScreenState extends State<EditorScreen>
                   _skinTab(),
                   _makeupTab(),
                   _shapeTab(),
+                  _glowTab(),
                   _filtersTab(),
                 ],
               ),
@@ -425,6 +440,43 @@ class _EditorScreenState extends State<EditorScreen>
           const Text(
             'Subtle liquify around the detected landmarks. Keep it gentle for a '
             'natural look; full quality is applied on save.',
+            style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.4),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _glowTab() {
+    return _faceGate(
+      ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        children: [
+          AdjustSlider(
+            label: 'Radiance',
+            value: _glow.radiance,
+            min: 0,
+            max: 1,
+            onChanged: (v) => _setGlow(_glow.copyWith(radiance: v)),
+          ),
+          AdjustSlider(
+            label: 'Under-eye',
+            value: _glow.underEye,
+            min: 0,
+            max: 1,
+            onChanged: (v) => _setGlow(_glow.copyWith(underEye: v)),
+          ),
+          AdjustSlider(
+            label: 'Lip gloss',
+            value: _glow.lipGloss,
+            min: 0,
+            max: 1,
+            onChanged: (v) => _setGlow(_glow.copyWith(lipGloss: v)),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Soft highlights placed on the cheekbones, under the eyes and the '
+            'lower lip. Nothing outside the face is touched.',
             style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.4),
           ),
         ],

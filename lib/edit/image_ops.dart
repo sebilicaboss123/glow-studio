@@ -5,6 +5,7 @@ import 'package:image/image.dart' as img;
 
 import 'adjustments.dart';
 import 'face_geometry.dart';
+import 'glow.dart';
 import 'makeup.dart';
 import 'reshape.dart';
 
@@ -46,16 +47,18 @@ Future<Uint8List> renderPreview(
   Uint8List basePng,
   double smooth,
   Makeup makeup,
+  Glow glow,
   Reshape reshape,
   FaceGeometry geom,
 ) {
-  if (smooth <= 0.001 && makeup.isEmpty && reshape.isEmpty) {
+  if (smooth <= 0.001 && makeup.isEmpty && glow.isEmpty && reshape.isEmpty) {
     return Future<Uint8List>.value(basePng);
   }
   return compute(_renderEntry, <String, dynamic>{
     'bytes': basePng,
     'smooth': smooth,
     'makeup': makeup.toMap(),
+    'glow': glow.toMap(),
     'reshape': reshape.toMap(),
     'geom': geom.toMap(),
   });
@@ -67,6 +70,7 @@ Future<Uint8List> renderExport(
   Uint8List originalBytes,
   Adjustments adjustments,
   Makeup makeup,
+  Glow glow,
   Reshape reshape,
   FaceGeometry geom,
 ) {
@@ -75,6 +79,7 @@ Future<Uint8List> renderExport(
     'smooth': adjustments.smooth,
     'matrix': adjustments.toColorMatrix(),
     'makeup': makeup.toMap(),
+    'glow': glow.toMap(),
     'reshape': reshape.toMap(),
     'geom': geom.toMap(),
     'maxEdge': kExportMaxEdge,
@@ -104,6 +109,7 @@ Uint8List _renderEntry(Map<String, dynamic> args) {
   final makeup = Makeup.fromMap((args['makeup'] as Map).cast<String, dynamic>());
   final geom = FaceGeometry.fromMap((args['geom'] as Map).cast<String, dynamic>());
 
+  final glow = Glow.fromMap((args['glow'] as Map).cast<String, dynamic>());
   final reshape =
       Reshape.fromMap((args['reshape'] as Map).cast<String, dynamic>());
 
@@ -111,6 +117,7 @@ Uint8List _renderEntry(Map<String, dynamic> args) {
   if (src == null) return bytes;
   var image = _selectiveSmooth(src, smooth);
   _applyMakeup(image, makeup, geom);
+  _applyGlow(image, glow, geom);
   image = _applyReshape(image, reshape, geom);
   return img.encodePng(image);
 }
@@ -120,6 +127,7 @@ Uint8List _exportEntry(Map<String, dynamic> args) {
   final smooth = (args['smooth'] as num).toDouble();
   final matrix = (args['matrix'] as List).cast<double>();
   final makeup = Makeup.fromMap((args['makeup'] as Map).cast<String, dynamic>());
+  final glow = Glow.fromMap((args['glow'] as Map).cast<String, dynamic>());
   final reshape =
       Reshape.fromMap((args['reshape'] as Map).cast<String, dynamic>());
   final geom = FaceGeometry.fromMap((args['geom'] as Map).cast<String, dynamic>());
@@ -132,6 +140,7 @@ Uint8List _exportEntry(Map<String, dynamic> args) {
   var image = _fit(img.bakeOrientation(decoded), maxEdge);
   image = _selectiveSmooth(image, smooth);
   _applyMakeup(image, makeup, geom);
+  _applyGlow(image, glow, geom);
   image = _applyReshape(image, reshape, geom);
   _bakeMatrix(image, matrix);
   return img.encodeJpg(image, quality: 95);
@@ -633,4 +642,146 @@ List<int> _sampleBilinear(img.Image src, double fx, double fy) {
     ch(p00.b, p10.b, p01.b, p11.b),
     p00.a.toInt(),
   ];
+}
+
+// --- Glow (face-only highlights, reusing mask + blend helpers) ---
+
+void _applyGlow(img.Image image, Glow g, FaceGeometry geom) {
+  if (!geom.hasFace || g.isEmpty) return;
+  final W = image.width;
+  final H = image.height;
+
+  final leftEye = _boundsPx(geom.leftEye, W, H);
+  final rightEye = _boundsPx(geom.rightEye, W, H);
+  final lips = _boundsPx(geom.lipsOuter, W, H);
+  final faceHalf = math.max(8.0, geom.faceWidth * W / 2);
+
+  var minX = W.toDouble(), minY = H.toDouble(), maxX = 0.0, maxY = 0.0;
+  void inc(double x0, double y0, double x1, double y1) {
+    minX = math.min(minX, x0);
+    minY = math.min(minY, y0);
+    maxX = math.max(maxX, x1);
+    maxY = math.max(maxY, y1);
+  }
+
+  final m = faceHalf * 0.45;
+  inc(geom.leftCheekX * W - m, geom.leftCheekY * H - m,
+      geom.leftCheekX * W + m, geom.leftCheekY * H + m);
+  inc(geom.rightCheekX * W - m, geom.rightCheekY * H - m,
+      geom.rightCheekX * W + m, geom.rightCheekY * H + m);
+  if (leftEye != null) {
+    inc(leftEye[0], leftEye[1], leftEye[2], leftEye[3] + (leftEye[3] - leftEye[1]));
+  }
+  if (rightEye != null) {
+    inc(rightEye[0], rightEye[1], rightEye[2],
+        rightEye[3] + (rightEye[3] - rightEye[1]));
+  }
+  if (lips != null) inc(lips[0], lips[1], lips[2], lips[3]);
+  if (maxX <= minX || maxY <= minY) return;
+
+  final bx = minX.floor().clamp(0, W - 1);
+  final by = minY.floor().clamp(0, H - 1);
+  final bx2 = maxX.ceil().clamp(0, W - 1);
+  final by2 = maxY.ceil().clamp(0, H - 1);
+  final bw = bx2 - bx + 1;
+  final bh = by2 - by + 1;
+  if (bw < 2 || bh < 2) return;
+  final feather = (math.max(bw, bh) / 50).clamp(1, 14).round();
+
+  if (g.radiance > 0) {
+    final mask = Uint8List(bw * bh);
+    final rCheek = (faceHalf * 0.26).clamp(3.0, W.toDouble());
+    _fillCircle(mask, bw, bh, bx, by, geom.leftCheekX * W, geom.leftCheekY * H, rCheek);
+    _fillCircle(mask, bw, bh, bx, by, geom.rightCheekX * W, geom.rightCheekY * H, rCheek);
+    if (leftEye != null && rightEye != null) {
+      final nbx = ((leftEye[0] + leftEye[2]) / 2 + (rightEye[0] + rightEye[2]) / 2) / 2;
+      final nby = ((leftEye[1] + leftEye[3]) / 2 + (rightEye[1] + rightEye[3]) / 2) / 2 +
+          faceHalf * 0.25;
+      _fillCircle(mask, bw, bh, bx, by, nbx, nby, faceHalf * 0.16);
+    }
+    _boxBlur(mask, bw, bh, feather);
+    _blendGlow(image, mask, bx, by, bw, bh, g.radiance * 0.5);
+  }
+
+  if (g.underEye > 0) {
+    final mask = Uint8List(bw * bh);
+    if (leftEye != null) {
+      final eh = leftEye[3] - leftEye[1];
+      _fillRect(mask, bw, bh, bx, by, leftEye[0], leftEye[3] + eh * 0.1,
+          leftEye[2], leftEye[3] + eh * 0.9);
+    }
+    if (rightEye != null) {
+      final eh = rightEye[3] - rightEye[1];
+      _fillRect(mask, bw, bh, bx, by, rightEye[0], rightEye[3] + eh * 0.1,
+          rightEye[2], rightEye[3] + eh * 0.9);
+    }
+    _boxBlur(mask, bw, bh, feather);
+    _blendWhiten(image, mask, bx, by, bw, bh, g.underEye * 0.5);
+  }
+
+  if (g.lipGloss > 0 && geom.lipsOuter.length >= 6 && lips != null) {
+    final lipMask = Uint8List(bw * bh);
+    _fillPolygon(lipMask, bw, bh, bx, by, geom.lipsOuter, W, H);
+    final glossMask = Uint8List(bw * bh);
+    final lipW = lips[2] - lips[0];
+    final lipH = lips[3] - lips[1];
+    final gcx = (lips[0] + lips[2]) / 2;
+    final gcy = lips[1] + lipH * 0.68;
+    _fillCircle(glossMask, bw, bh, bx, by, gcx, gcy,
+        (lipW * 0.30).clamp(2.0, W.toDouble()));
+    for (var i = 0; i < glossMask.length; i++) {
+      if (lipMask[i] < glossMask[i]) glossMask[i] = lipMask[i];
+    }
+    _boxBlur(glossMask, bw, bh, (feather / 2).clamp(1, 6).round());
+    _blendBrighten(image, glossMask, bx, by, bw, bh, g.lipGloss * 0.5);
+  }
+}
+
+void _fillRect(
+  Uint8List mask,
+  int bw,
+  int bh,
+  int bx,
+  int by,
+  double x0,
+  double y0,
+  double x1,
+  double y1,
+) {
+  final ix0 = (x0 - bx).floor().clamp(0, bw);
+  final iy0 = (y0 - by).floor().clamp(0, bh);
+  final ix1 = (x1 - bx).ceil().clamp(0, bw);
+  final iy1 = (y1 - by).ceil().clamp(0, bh);
+  for (var y = iy0; y < iy1; y++) {
+    for (var x = ix0; x < ix1; x++) {
+      mask[y * bw + x] = 255;
+    }
+  }
+}
+
+/// Warm highlight toward white (less lift on blue to keep it warm).
+void _blendGlow(
+  img.Image image,
+  Uint8List mask,
+  int bx,
+  int by,
+  int bw,
+  int bh,
+  double intensity,
+) {
+  for (var y = 0; y < bh; y++) {
+    for (var x = 0; x < bw; x++) {
+      final cov = mask[y * bw + x] / 255.0 * intensity;
+      if (cov <= 0.003) continue;
+      final p = image.getPixel(bx + x, by + y);
+      image.setPixelRgba(
+        bx + x,
+        by + y,
+        (p.r + (255 - p.r) * 0.34 * cov).clamp(0, 255).round(),
+        (p.g + (255 - p.g) * 0.30 * cov).clamp(0, 255).round(),
+        (p.b + (255 - p.b) * 0.24 * cov).clamp(0, 255).round(),
+        p.a.toInt(),
+      );
+    }
+  }
 }

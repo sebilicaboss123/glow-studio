@@ -4,32 +4,41 @@ An **original** photo retouch and color-grading app for iPhone, built with Flutt
 It is not a copy of any existing product — all code, UI and image processing here
 are written from scratch.
 
-## What it does (v1)
+## What it does
 
-- Import a photo from the gallery or take one with the camera.
+Import a photo from the gallery or camera, edit across six tabs, press and hold
+the preview to compare with the original, and save the full-resolution result to
+your gallery.
+
 - **Light**: brightness, contrast, saturation, warmth — live, on-GPU preview.
-- **Skin**: edge-aware skin smoothing that softens skin while keeping eyes,
-  brows and lips sharp. Full quality is baked into the exported photo.
-- **Filters**: a set of color-grade presets (Radiant, Warm Gold, Cool, Mono,
-  Noir, Fade, Vivid), each previewed live.
-- Press and hold the preview to compare against the original.
-- Save the full-resolution result to your gallery.
+- **Skin**: edge-aware smoothing that softens skin while keeping eyes, brows and
+  lips sharp.
+- **Makeup** (face landmarks): lipstick with a color palette + intensity, blush,
+  teeth whitening, eye brightening.
+- **Shape** (face landmarks): subtle face slimming and eye enlarging via an
+  inverse-mapped liquify warp.
+- **Glow** (face landmarks): warm radiance on the cheekbones, under-eye
+  brightening, and a lower-lip gloss.
+- **Filters**: color-grade presets (Radiant, Warm Gold, Cool, Mono, Noir, Fade,
+  Vivid), each previewed live.
 
-The editing preview runs on a downscaled copy for smooth sliders; the **Save**
-step re-renders the pipeline at full resolution on a background isolate.
+Everything is **face-only** — nothing touches the background. Skin, makeup, glow
+and reshape run through one isolate pipeline, so the preview matches the saved
+photo; the preview uses a downscaled copy for smooth sliders while **Save**
+re-renders at full resolution. On-device face detection (Google ML Kit) runs the
+first time you open a landmark tab.
 
-## Roadmap (v2)
+## Roadmap
 
-These need on-device face landmarks (Google ML Kit / Apple Vision) and are the
-next milestone:
+Possible next face-only additions:
 
-- Face reshape (subtle slim / eye enlarge / jaw) via a landmark mesh warp.
-- Makeup overlays (lips, blush, brows) positioned from landmarks.
-- Teeth whitening and eye brightening (localized).
-- Background blur / replace via selfie segmentation.
+- Blemish / spot remover (tap to heal).
+- More makeup: eyebrows, eyeshadow, eyeliner.
+- Nose slimming and lip reshape.
+- One-tap "looks" that combine several effects.
 
 > Note on "AI transformations" (age, smile, gender swap): those rely on trained
-> neural networks. Glow Studio will use its own / openly-licensed models, so the
+> neural networks. Glow Studio would use its own / openly-licensed models, so the
 > *categories* of features can match a commercial editor, but the exact output
 > quality of any specific proprietary app cannot be reproduced.
 
