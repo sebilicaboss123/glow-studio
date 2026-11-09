@@ -25,6 +25,9 @@ class FaceService {
         enableContours: true,
         enableLandmarks: true,
         performanceMode: FaceDetectorMode.accurate,
+        // Default is 0.1 (face must be >=10% of image width), which misses
+        // faces in group/distance shots. Lower it so smaller faces detect.
+        minFaceSize: 0.04,
       ),
     );
     File? temp;
