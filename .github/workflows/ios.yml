@@ -1,0 +1,51 @@
+name: Build iOS (unsigned IPA)
+
+# Builds an unsigned .ipa on a macOS runner. Download it from the run's
+# Artifacts and sideload with AltServer (AltStore re-signs it with your Apple ID).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.9
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Build iOS (no code signing)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package unsigned IPA
+        run: |
+          set -e
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/Runner.app
+          zip -qry GlowStudio.ipa Payload
+          echo "Built:" && ls -lh GlowStudio.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GlowStudio-unsigned-ipa
+          path: build/ios/iphoneos/GlowStudio.ipa
+          if-no-files-found: error
+          retention-days: 14
