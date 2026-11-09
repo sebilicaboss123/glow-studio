@@ -6,9 +6,14 @@ import 'package:flutter/material.dart';
 import 'package:gal/gal.dart';
 
 import '../edit/adjustments.dart';
+import '../edit/face.dart';
+import '../edit/face_geometry.dart';
 import '../edit/image_ops.dart';
+import '../edit/makeup.dart';
+import '../edit/prepared_image.dart';
 import '../widgets/adjust_slider.dart';
 import '../widgets/filter_strip.dart';
+import '../widgets/makeup_controls.dart';
 
 class EditorScreen extends StatefulWidget {
   const EditorScreen({super.key, required this.prepared});
@@ -24,57 +29,95 @@ class _EditorScreenState extends State<EditorScreen>
   late final TabController _tabs;
 
   Adjustments _adj = const Adjustments();
+  Makeup _makeup = const Makeup();
 
-  /// The clean preview as imported (color unmodified).
   late Uint8List _basePreview;
+  late Uint8List _processed; // base + smoothing + makeup (no color grade)
 
-  /// Preview after skin smoothing is applied (color still unmodified).
-  late Uint8List _smoothedPreview;
+  FaceGeometry _geom = const FaceGeometry.none();
+  bool _detecting = false;
+  bool _detectTried = false;
 
-  double _renderedSmooth = 0;
-  Timer? _smoothDebounce;
-  bool _smoothing = false;
+  Timer? _debounce;
+  int _renderSeq = 0;
+  bool _rendering = false;
   bool _exporting = false;
   bool _showOriginal = false;
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 3, vsync: this);
+    _tabs = TabController(length: 4, vsync: this);
+    _tabs.addListener(() {
+      if (_tabs.index == 2 && !_detectTried) _runDetection();
+    });
     _basePreview = widget.prepared.preview;
-    _smoothedPreview = widget.prepared.preview;
+    _processed = widget.prepared.preview;
   }
 
   @override
   void dispose() {
-    _smoothDebounce?.cancel();
+    _debounce?.cancel();
     _tabs.dispose();
     super.dispose();
   }
 
-  void _update(Adjustments next) {
-    setState(() => _adj = next);
-    if (next.smooth != _renderedSmooth) {
-      _scheduleSmooth(next.smooth);
+  bool get _pipelineActive => _adj.smooth > 0.001 || !_makeup.isEmpty;
+
+  Future<void> _runDetection() async {
+    _detectTried = true;
+    setState(() => _detecting = true);
+    try {
+      final g = await FaceService.detect(
+        _basePreview,
+        widget.prepared.width,
+        widget.prepared.height,
+      );
+      if (!mounted) return;
+      setState(() {
+        _geom = g;
+        _detecting = false;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _geom = const FaceGeometry.none();
+          _detecting = false;
+        });
+      }
     }
   }
 
-  void _scheduleSmooth(double amount) {
-    _smoothDebounce?.cancel();
-    _smoothDebounce = Timer(const Duration(milliseconds: 160), () async {
-      setState(() => _smoothing = true);
+  void _setAdjustments(Adjustments next) {
+    final smoothChanged = next.smooth != _adj.smooth;
+    setState(() => _adj = next);
+    if (smoothChanged) _scheduleRender();
+  }
+
+  void _setMakeup(Makeup next) {
+    setState(() => _makeup = next);
+    _scheduleRender();
+  }
+
+  void _scheduleRender() {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 170), () async {
+      final seq = ++_renderSeq;
+      setState(() => _rendering = true);
       try {
-        final bytes = amount <= 0.001
-            ? _basePreview
-            : await smoothPreview(_basePreview, amount);
-        if (!mounted) return;
+        final bytes = await renderPreview(
+          _basePreview,
+          _adj.smooth,
+          _makeup,
+          _geom,
+        );
+        if (!mounted || seq != _renderSeq) return;
         setState(() {
-          _smoothedPreview = bytes;
-          _renderedSmooth = amount;
-          _smoothing = false;
+          _processed = bytes;
+          _rendering = false;
         });
       } catch (_) {
-        if (mounted) setState(() => _smoothing = false);
+        if (mounted && seq == _renderSeq) setState(() => _rendering = false);
       }
     });
   }
@@ -84,9 +127,8 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() => _exporting = true);
     try {
       final original = await File(widget.prepared.sourcePath).readAsBytes();
-      final jpg = await renderExport(original, _adj);
-      final hasAccess = await Gal.hasAccess(toAlbum: true);
-      if (!hasAccess) {
+      final jpg = await renderExport(original, _adj, _makeup, _geom);
+      if (!await Gal.hasAccess(toAlbum: true)) {
         await Gal.requestAccess(toAlbum: true);
       }
       await Gal.putImageBytes(jpg, album: 'Glow Studio');
@@ -111,7 +153,15 @@ class _EditorScreenState extends State<EditorScreen>
     }
   }
 
-  void _reset() => _update(const Adjustments());
+  void _reset() {
+    setState(() {
+      _adj = const Adjustments();
+      _makeup = const Makeup();
+      _processed = _basePreview;
+    });
+  }
+
+  bool get _isNeutral => _adj.isNeutral && _makeup.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -123,7 +173,7 @@ class _EditorScreenState extends State<EditorScreen>
         actions: [
           IconButton(
             tooltip: 'Reset',
-            onPressed: _adj.isNeutral ? null : _reset,
+            onPressed: _isNeutral ? null : _reset,
             icon: const Icon(Icons.restart_alt),
           ),
           Padding(
@@ -157,7 +207,7 @@ class _EditorScreenState extends State<EditorScreen>
     final matrix = _showOriginal
         ? const Adjustments().toColorMatrix()
         : _adj.toColorMatrix();
-    final bytes = _showOriginal ? _basePreview : _smoothedPreview;
+    final bytes = _showOriginal || !_pipelineActive ? _basePreview : _processed;
     return GestureDetector(
       onTapDown: (_) => setState(() => _showOriginal = true),
       onTapUp: (_) => setState(() => _showOriginal = false),
@@ -172,24 +222,17 @@ class _EditorScreenState extends State<EditorScreen>
               colorFilter: ColorFilter.matrix(matrix),
               child: Image.memory(bytes, gaplessPlayback: true, fit: BoxFit.contain),
             ),
-            if (_smoothing)
-              Positioned(
-                top: 12,
-                right: 12,
-                child: _pill(scheme, 'Smoothing…'),
-              ),
+            if (_rendering)
+              Positioned(top: 12, right: 12, child: _pill('Rendering…')),
             if (_showOriginal)
-              Positioned(
-                bottom: 12,
-                child: _pill(scheme, 'Original'),
-              ),
+              Positioned(bottom: 12, child: _pill('Original')),
           ],
         ),
       ),
     );
   }
 
-  Widget _pill(ColorScheme scheme, String text) {
+  Widget _pill(String text) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
@@ -202,9 +245,9 @@ class _EditorScreenState extends State<EditorScreen>
 
   Widget _controls(ColorScheme scheme) {
     return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF16161C),
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      decoration: const BoxDecoration(
+        color: Color(0xFF16161C),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       child: SafeArea(
         top: false,
@@ -213,21 +256,25 @@ class _EditorScreenState extends State<EditorScreen>
           children: [
             TabBar(
               controller: _tabs,
+              isScrollable: true,
+              tabAlignment: TabAlignment.center,
               labelColor: scheme.primary,
               indicatorColor: scheme.primary,
               tabs: const [
                 Tab(text: 'Light'),
                 Tab(text: 'Skin'),
+                Tab(text: 'Makeup'),
                 Tab(text: 'Filters'),
               ],
             ),
             SizedBox(
-              height: 190,
+              height: 220,
               child: TabBarView(
                 controller: _tabs,
                 children: [
                   _lightTab(),
                   _skinTab(),
+                  _makeupTab(),
                   _filtersTab(),
                 ],
               ),
@@ -245,22 +292,22 @@ class _EditorScreenState extends State<EditorScreen>
         AdjustSlider(
           label: 'Brightness',
           value: _adj.brightness,
-          onChanged: (v) => _update(_adj.copyWith(brightness: v)),
+          onChanged: (v) => _setAdjustments(_adj.copyWith(brightness: v)),
         ),
         AdjustSlider(
           label: 'Contrast',
           value: _adj.contrast,
-          onChanged: (v) => _update(_adj.copyWith(contrast: v)),
+          onChanged: (v) => _setAdjustments(_adj.copyWith(contrast: v)),
         ),
         AdjustSlider(
           label: 'Saturation',
           value: _adj.saturation,
-          onChanged: (v) => _update(_adj.copyWith(saturation: v)),
+          onChanged: (v) => _setAdjustments(_adj.copyWith(saturation: v)),
         ),
         AdjustSlider(
           label: 'Warmth',
           value: _adj.warmth,
-          onChanged: (v) => _update(_adj.copyWith(warmth: v)),
+          onChanged: (v) => _setAdjustments(_adj.copyWith(warmth: v)),
         ),
       ],
     );
@@ -277,7 +324,7 @@ class _EditorScreenState extends State<EditorScreen>
             value: _adj.smooth,
             min: 0,
             max: 1,
-            onChanged: (v) => _update(_adj.copyWith(smooth: v)),
+            onChanged: (v) => _setAdjustments(_adj.copyWith(smooth: v)),
           ),
           const SizedBox(height: 10),
           const Text(
@@ -290,11 +337,59 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
+  Widget _makeupTab() {
+    if (_detecting) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            SizedBox(height: 12),
+            Text('Finding the face…',
+                style: TextStyle(color: Colors.white54, fontSize: 13)),
+          ],
+        ),
+      );
+    }
+    if (!_geom.hasFace) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.face_retouching_off, color: Colors.white38, size: 34),
+              const SizedBox(height: 10),
+              const Text(
+                'No face detected in this photo.\nMakeup needs a clear, front-facing face.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: _detecting ? null : _runDetection,
+                child: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    return MakeupControls(
+      makeup: _makeup,
+      onChanged: _setMakeup,
+    );
+  }
+
   Widget _filtersTab() {
     return FilterStrip(
       preview: _basePreview,
       selected: _adj.filter,
-      onSelected: (f) => _update(_adj.copyWith(filter: f)),
+      onSelected: (f) => _setAdjustments(_adj.copyWith(filter: f)),
     );
   }
 }

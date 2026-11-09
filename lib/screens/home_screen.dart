@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../edit/image_ops.dart';
+import '../edit/prepared_image.dart';
 import 'editor_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -32,12 +33,17 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
       final Uint8List bytes = await File(file.path).readAsBytes();
-      final Uint8List preview = await buildPreview(bytes);
+      final PreviewData preview = await buildPreview(bytes);
       if (!mounted) return;
       await Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => EditorScreen(
-            prepared: PreparedImage(preview: preview, sourcePath: file.path),
+            prepared: PreparedImage(
+              preview: preview.bytes,
+              width: preview.width,
+              height: preview.height,
+              sourcePath: file.path,
+            ),
           ),
         ),
       );
