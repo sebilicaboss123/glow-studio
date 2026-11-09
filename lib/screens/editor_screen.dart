@@ -11,6 +11,7 @@ import '../edit/face_geometry.dart';
 import '../edit/image_ops.dart';
 import '../edit/makeup.dart';
 import '../edit/prepared_image.dart';
+import '../edit/reshape.dart';
 import '../widgets/adjust_slider.dart';
 import '../widgets/filter_strip.dart';
 import '../widgets/makeup_controls.dart';
@@ -30,6 +31,7 @@ class _EditorScreenState extends State<EditorScreen>
 
   Adjustments _adj = const Adjustments();
   Makeup _makeup = const Makeup();
+  Reshape _reshape = const Reshape();
 
   late Uint8List _basePreview;
   late Uint8List _processed; // base + smoothing + makeup (no color grade)
@@ -47,9 +49,11 @@ class _EditorScreenState extends State<EditorScreen>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
     _tabs.addListener(() {
-      if (_tabs.index == 2 && !_detectTried) _runDetection();
+      if ((_tabs.index == 2 || _tabs.index == 3) && !_detectTried) {
+        _runDetection();
+      }
     });
     _basePreview = widget.prepared.preview;
     _processed = widget.prepared.preview;
@@ -62,7 +66,8 @@ class _EditorScreenState extends State<EditorScreen>
     super.dispose();
   }
 
-  bool get _pipelineActive => _adj.smooth > 0.001 || !_makeup.isEmpty;
+  bool get _pipelineActive =>
+      _adj.smooth > 0.001 || !_makeup.isEmpty || !_reshape.isEmpty;
 
   Future<void> _runDetection() async {
     _detectTried = true;
@@ -99,6 +104,11 @@ class _EditorScreenState extends State<EditorScreen>
     _scheduleRender();
   }
 
+  void _setReshape(Reshape next) {
+    setState(() => _reshape = next);
+    _scheduleRender();
+  }
+
   void _scheduleRender() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 170), () async {
@@ -109,6 +119,7 @@ class _EditorScreenState extends State<EditorScreen>
           _basePreview,
           _adj.smooth,
           _makeup,
+          _reshape,
           _geom,
         );
         if (!mounted || seq != _renderSeq) return;
@@ -127,7 +138,7 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() => _exporting = true);
     try {
       final original = await File(widget.prepared.sourcePath).readAsBytes();
-      final jpg = await renderExport(original, _adj, _makeup, _geom);
+      final jpg = await renderExport(original, _adj, _makeup, _reshape, _geom);
       if (!await Gal.hasAccess(toAlbum: true)) {
         await Gal.requestAccess(toAlbum: true);
       }
@@ -157,11 +168,13 @@ class _EditorScreenState extends State<EditorScreen>
     setState(() {
       _adj = const Adjustments();
       _makeup = const Makeup();
+      _reshape = const Reshape();
       _processed = _basePreview;
     });
   }
 
-  bool get _isNeutral => _adj.isNeutral && _makeup.isEmpty;
+  bool get _isNeutral =>
+      _adj.isNeutral && _makeup.isEmpty && _reshape.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -264,6 +277,7 @@ class _EditorScreenState extends State<EditorScreen>
                 Tab(text: 'Light'),
                 Tab(text: 'Skin'),
                 Tab(text: 'Makeup'),
+                Tab(text: 'Shape'),
                 Tab(text: 'Filters'),
               ],
             ),
@@ -275,6 +289,7 @@ class _EditorScreenState extends State<EditorScreen>
                   _lightTab(),
                   _skinTab(),
                   _makeupTab(),
+                  _shapeTab(),
                   _filtersTab(),
                 ],
               ),
@@ -337,7 +352,8 @@ class _EditorScreenState extends State<EditorScreen>
     );
   }
 
-  Widget _makeupTab() {
+  /// Wraps a face-dependent tab with loading / no-face states.
+  Widget _faceGate(Widget child) {
     if (_detecting) {
       return const Center(
         child: Column(
@@ -365,7 +381,7 @@ class _EditorScreenState extends State<EditorScreen>
               const Icon(Icons.face_retouching_off, color: Colors.white38, size: 34),
               const SizedBox(height: 10),
               const Text(
-                'No face detected in this photo.\nMakeup needs a clear, front-facing face.',
+                'No face detected in this photo.\nThis needs a clear, front-facing face.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
               ),
@@ -379,9 +395,40 @@ class _EditorScreenState extends State<EditorScreen>
         ),
       );
     }
-    return MakeupControls(
-      makeup: _makeup,
-      onChanged: _setMakeup,
+    return child;
+  }
+
+  Widget _makeupTab() {
+    return _faceGate(MakeupControls(makeup: _makeup, onChanged: _setMakeup));
+  }
+
+  Widget _shapeTab() {
+    return _faceGate(
+      ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        children: [
+          AdjustSlider(
+            label: 'Face slim',
+            value: _reshape.faceSlim,
+            min: 0,
+            max: 1,
+            onChanged: (v) => _setReshape(_reshape.copyWith(faceSlim: v)),
+          ),
+          AdjustSlider(
+            label: 'Eye size',
+            value: _reshape.eyeSize,
+            min: 0,
+            max: 1,
+            onChanged: (v) => _setReshape(_reshape.copyWith(eyeSize: v)),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Subtle liquify around the detected landmarks. Keep it gentle for a '
+            'natural look; full quality is applied on save.',
+            style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.4),
+          ),
+        ],
+      ),
     );
   }
 

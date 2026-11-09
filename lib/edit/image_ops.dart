@@ -6,6 +6,7 @@ import 'package:image/image.dart' as img;
 import 'adjustments.dart';
 import 'face_geometry.dart';
 import 'makeup.dart';
+import 'reshape.dart';
 
 /// Preview bytes plus their pixel dimensions (needed for face detection).
 class PreviewData {
@@ -45,15 +46,17 @@ Future<Uint8List> renderPreview(
   Uint8List basePng,
   double smooth,
   Makeup makeup,
+  Reshape reshape,
   FaceGeometry geom,
 ) {
-  if (smooth <= 0.001 && makeup.isEmpty) {
+  if (smooth <= 0.001 && makeup.isEmpty && reshape.isEmpty) {
     return Future<Uint8List>.value(basePng);
   }
   return compute(_renderEntry, <String, dynamic>{
     'bytes': basePng,
     'smooth': smooth,
     'makeup': makeup.toMap(),
+    'reshape': reshape.toMap(),
     'geom': geom.toMap(),
   });
 }
@@ -64,6 +67,7 @@ Future<Uint8List> renderExport(
   Uint8List originalBytes,
   Adjustments adjustments,
   Makeup makeup,
+  Reshape reshape,
   FaceGeometry geom,
 ) {
   return compute(_exportEntry, <String, dynamic>{
@@ -71,6 +75,7 @@ Future<Uint8List> renderExport(
     'smooth': adjustments.smooth,
     'matrix': adjustments.toColorMatrix(),
     'makeup': makeup.toMap(),
+    'reshape': reshape.toMap(),
     'geom': geom.toMap(),
     'maxEdge': kExportMaxEdge,
   });
@@ -99,10 +104,14 @@ Uint8List _renderEntry(Map<String, dynamic> args) {
   final makeup = Makeup.fromMap((args['makeup'] as Map).cast<String, dynamic>());
   final geom = FaceGeometry.fromMap((args['geom'] as Map).cast<String, dynamic>());
 
+  final reshape =
+      Reshape.fromMap((args['reshape'] as Map).cast<String, dynamic>());
+
   final src = img.decodeImage(bytes);
   if (src == null) return bytes;
   var image = _selectiveSmooth(src, smooth);
   _applyMakeup(image, makeup, geom);
+  image = _applyReshape(image, reshape, geom);
   return img.encodePng(image);
 }
 
@@ -111,6 +120,8 @@ Uint8List _exportEntry(Map<String, dynamic> args) {
   final smooth = (args['smooth'] as num).toDouble();
   final matrix = (args['matrix'] as List).cast<double>();
   final makeup = Makeup.fromMap((args['makeup'] as Map).cast<String, dynamic>());
+  final reshape =
+      Reshape.fromMap((args['reshape'] as Map).cast<String, dynamic>());
   final geom = FaceGeometry.fromMap((args['geom'] as Map).cast<String, dynamic>());
   final maxEdge = args['maxEdge'] as int;
 
@@ -121,6 +132,7 @@ Uint8List _exportEntry(Map<String, dynamic> args) {
   var image = _fit(img.bakeOrientation(decoded), maxEdge);
   image = _selectiveSmooth(image, smooth);
   _applyMakeup(image, makeup, geom);
+  image = _applyReshape(image, reshape, geom);
   _bakeMatrix(image, matrix);
   return img.encodeJpg(image, quality: 95);
 }
@@ -463,3 +475,162 @@ void _bakeMatrix(img.Image image, List<double> m) {
 }
 
 int _mix(num a, num b, double t) => (a + (b - a) * t).clamp(0, 255).round();
+
+// --- Reshape (subtle liquify warp, inverse-mapped + bilinear) ---
+
+img.Image _applyReshape(img.Image image, Reshape r, FaceGeometry g) {
+  if (!g.hasFace || r.isEmpty) return image;
+  final W = image.width;
+  final H = image.height;
+
+  final leftEye = _boundsPx(g.leftEye, W, H);
+  final rightEye = _boundsPx(g.rightEye, W, H);
+  final lips = _boundsPx(g.lipsOuter, W, H);
+
+  // Eye enlarge setup.
+  final eyeStrength = r.eyeSize.clamp(0.0, 1.0) * 0.35;
+  var hasL = false, hasR = false;
+  double lecx = 0, lecy = 0, ler = 0, recx = 0, recy = 0, rer = 0;
+  if (eyeStrength > 0 && leftEye != null) {
+    lecx = (leftEye[0] + leftEye[2]) / 2;
+    lecy = (leftEye[1] + leftEye[3]) / 2;
+    ler = 0.5 * math.max(leftEye[2] - leftEye[0], leftEye[3] - leftEye[1]) * 1.6;
+    hasL = ler > 2;
+  }
+  if (eyeStrength > 0 && rightEye != null) {
+    recx = (rightEye[0] + rightEye[2]) / 2;
+    recy = (rightEye[1] + rightEye[3]) / 2;
+    rer = 0.5 * math.max(rightEye[2] - rightEye[0], rightEye[3] - rightEye[1]) * 1.6;
+    hasR = rer > 2;
+  }
+
+  // Face slim setup.
+  final slim = r.faceSlim.clamp(0.0, 1.0) * 0.2;
+  final cx = ((g.leftCheekX + g.rightCheekX) / 2) * W;
+  final faceHalf = math.max(8.0, g.faceWidth * W / 2);
+  double eyeY;
+  if (leftEye != null && rightEye != null) {
+    eyeY = (leftEye[1] + rightEye[1]) / 2;
+  } else if (leftEye != null) {
+    eyeY = leftEye[1];
+  } else if (rightEye != null) {
+    eyeY = rightEye[1];
+  } else {
+    eyeY = g.leftCheekY * H - faceHalf * 0.3;
+  }
+  final bandTop = eyeY;
+  final bandBottom = (lips != null ? lips[3] : g.leftCheekY * H) + faceHalf * 0.7;
+  final slimActive = slim > 0 && bandBottom > bandTop;
+
+  if (!hasL && !hasR && !slimActive) return image;
+
+  final src = image.clone();
+
+  // Affected bounding box.
+  var minX = W.toDouble(), minY = H.toDouble(), maxX = 0.0, maxY = 0.0;
+  void inc(double x0, double y0, double x1, double y1) {
+    minX = math.min(minX, x0);
+    minY = math.min(minY, y0);
+    maxX = math.max(maxX, x1);
+    maxY = math.max(maxY, y1);
+  }
+
+  if (hasL) inc(lecx - ler, lecy - ler, lecx + ler, lecy + ler);
+  if (hasR) inc(recx - rer, recy - rer, recx + rer, recy + rer);
+  if (slimActive) inc(cx - faceHalf * 1.4, bandTop, cx + faceHalf * 1.4, bandBottom);
+
+  final x0 = minX.floor().clamp(0, W - 1);
+  final y0 = minY.floor().clamp(0, H - 1);
+  final x1 = maxX.ceil().clamp(0, W - 1);
+  final y1 = maxY.ceil().clamp(0, H - 1);
+
+  for (var y = y0; y <= y1; y++) {
+    for (var x = x0; x <= x1; x++) {
+      var sx = x.toDouble();
+      var sy = y.toDouble();
+
+      if (hasL) {
+        final dx = x - lecx, dy = y - lecy;
+        final d = math.sqrt(dx * dx + dy * dy);
+        if (d < ler) {
+          final t = d / ler;
+          final f = 1 - eyeStrength * (1 - t) * (1 - t);
+          sx = lecx + dx * f;
+          sy = lecy + dy * f;
+        }
+      }
+      if (hasR) {
+        final dx = x - recx, dy = y - recy;
+        final d = math.sqrt(dx * dx + dy * dy);
+        if (d < rer) {
+          final t = d / rer;
+          final f = 1 - eyeStrength * (1 - t) * (1 - t);
+          sx = recx + dx * f;
+          sy = recy + dy * f;
+        }
+      }
+
+      if (slimActive && y >= bandTop && y <= bandBottom) {
+        final u = ((y - bandTop) / (bandBottom - bandTop)).clamp(0.0, 1.0);
+        final vf = math.sin(math.pi * u);
+        final ax = (x - cx).abs();
+        double hf;
+        if (ax < faceHalf) {
+          hf = 1;
+        } else if (ax < faceHalf * 1.4) {
+          hf = 1 - (ax - faceHalf) / (faceHalf * 0.4);
+        } else {
+          hf = 0;
+        }
+        final factor = 1 + slim * vf * hf;
+        sx = cx + (sx - cx) * factor;
+      }
+
+      final p = _sampleBilinear(src, sx, sy);
+      image.setPixelRgba(x, y, p[0], p[1], p[2], p[3]);
+    }
+  }
+  return image;
+}
+
+List<double>? _boundsPx(List<double> norm, int W, int H) {
+  if (norm.length < 6) return null;
+  var minx = double.infinity, miny = double.infinity;
+  var maxx = -double.infinity, maxy = -double.infinity;
+  for (var i = 0; i + 1 < norm.length; i += 2) {
+    final x = norm[i] * W, y = norm[i + 1] * H;
+    minx = math.min(minx, x);
+    miny = math.min(miny, y);
+    maxx = math.max(maxx, x);
+    maxy = math.max(maxy, y);
+  }
+  return <double>[minx, miny, maxx, maxy];
+}
+
+List<int> _sampleBilinear(img.Image src, double fx, double fy) {
+  final W = src.width, H = src.height;
+  var x = fx.clamp(0.0, (W - 1).toDouble());
+  var y = fy.clamp(0.0, (H - 1).toDouble());
+  final x0 = x.floor();
+  final y0 = y.floor();
+  final x1 = math.min(x0 + 1, W - 1);
+  final y1 = math.min(y0 + 1, H - 1);
+  final wx = x - x0;
+  final wy = y - y0;
+  final p00 = src.getPixel(x0, y0);
+  final p10 = src.getPixel(x1, y0);
+  final p01 = src.getPixel(x0, y1);
+  final p11 = src.getPixel(x1, y1);
+  int ch(num a, num b, num c, num d) {
+    final top = a + (b - a) * wx;
+    final bot = c + (d - c) * wx;
+    return (top + (bot - top) * wy).round().clamp(0, 255);
+  }
+
+  return <int>[
+    ch(p00.r, p10.r, p01.r, p11.r),
+    ch(p00.g, p10.g, p01.g, p11.g),
+    ch(p00.b, p10.b, p01.b, p11.b),
+    p00.a.toInt(),
+  ];
+}
