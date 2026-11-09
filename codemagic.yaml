@@ -1,0 +1,32 @@
+# Codemagic build for an UNSIGNED iOS .ipa (sideload with AltServer / AltStore).
+# Connect this repo in Codemagic, then start the "ios-unsigned" workflow.
+workflows:
+  ios-unsigned:
+    name: iOS unsigned (AltStore)
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter version
+        script: flutter --version
+      - name: Get Flutter packages
+        script: flutter pub get
+      - name: Install CocoaPods
+        script: |
+          cd ios
+          pod install
+      - name: Build unsigned iOS app
+        script: flutter build ios --release --no-codesign
+      - name: Package unsigned IPA
+        script: |
+          set -e
+          cd build/ios/iphoneos
+          mkdir -p Payload
+          cp -R Runner.app Payload/Runner.app
+          zip -qry GlowStudio.ipa Payload
+          echo "Built:" && ls -lh GlowStudio.ipa
+    artifacts:
+      - build/ios/iphoneos/GlowStudio.ipa
