@@ -44,4 +44,21 @@ post_install do |installer|
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
     end
   end
+
+  # Keep Objective-C category symbols from Google's static libraries
+  # (GoogleDataTransport / ML Kit). Without -ObjC the linker strips them in
+  # release builds, causing a SIGABRT "unrecognized selector" crash on the
+  # CCTLogWriter queue at launch.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_project.native_targets.each do |target|
+      target.build_configurations.each do |config|
+        existing = config.build_settings['OTHER_LDFLAGS'] || '$(inherited)'
+        existing = [existing] unless existing.is_a?(Array)
+        unless existing.include?('-ObjC')
+          config.build_settings['OTHER_LDFLAGS'] = existing + ['-ObjC']
+        end
+      end
+    end
+    aggregate_target.user_project.save
+  end
 end
