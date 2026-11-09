@@ -83,6 +83,7 @@ class _EditorScreenState extends State<EditorScreen>
         _basePreview,
         widget.prepared.width,
         widget.prepared.height,
+        widget.prepared.sourcePath,
       );
       if (!mounted) return;
       setState(() {
@@ -454,6 +455,18 @@ class _EditorScreenState extends State<EditorScreen>
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.white54, fontSize: 13, height: 1.4),
               ),
+              if (_geom.debug.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                SelectableText(
+                  _geom.debug,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.white30,
+                    fontSize: 11,
+                    fontFamily: 'Courier',
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               TextButton(
                 onPressed: _detecting ? null : _runDetection,

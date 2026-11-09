@@ -13,6 +13,7 @@ class FaceGeometry {
     this.rightCheekX = 0,
     this.rightCheekY = 0,
     this.faceWidth = 0,
+    this.debug = '',
   });
 
   const FaceGeometry.none() : this(hasFace: false);
@@ -29,6 +30,23 @@ class FaceGeometry {
 
   /// Normalized face width (0..1), used to size blush.
   final double faceWidth;
+
+  /// Short diagnostic string surfaced in the UI when no face is found.
+  final String debug;
+
+  FaceGeometry copyWith({bool? hasFace, String? debug}) => FaceGeometry(
+        hasFace: hasFace ?? this.hasFace,
+        lipsOuter: lipsOuter,
+        mouthInner: mouthInner,
+        leftEye: leftEye,
+        rightEye: rightEye,
+        leftCheekX: leftCheekX,
+        leftCheekY: leftCheekY,
+        rightCheekX: rightCheekX,
+        rightCheekY: rightCheekY,
+        faceWidth: faceWidth,
+        debug: debug ?? this.debug,
+      );
 
   Map<String, dynamic> toMap() => <String, dynamic>{
         'hasFace': hasFace,
